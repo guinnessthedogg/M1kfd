@@ -1,0 +1,140 @@
+name: Build iOS Application
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: 'latest' # Replace with your desired Xcode version
+
+    - name: Install dependencies
+      run: |
+        brew install dpkg ldid
+
+    - name: Build and Package Application
+      run: |
+        # Define variables
+        APPLICATION_NAME=PureKFD
+        CONFIGURATION=Debug
+        DEB_PACKAGE_NAME="uwu.lrdsnow.PureKFD"
+        DEB_PACKAGE_VERSION="4.0"
+        DEB_ARCHITECTURE="iphoneos-arm"
+        DEB_ARCHITECTURE_ROOTLESS="iphoneos-arm64"
+        DEB_MAINTAINER="Lrdsnow"
+
+        # Function to create the .deb package
+        function create_deb_package {
+            PACKAGE_DIR="$DEB_PACKAGE_NAME-$DEB_PACKAGE_VERSION-$DEB_ARCHITECTURE"
+            DEBIAN_DIR="$PACKAGE_DIR/DEBIAN"
+            APPLICATIONS_DIR="$PACKAGE_DIR/Applications"
+
+            mkdir -p "$DEBIAN_DIR"
+            mkdir -p "$APPLICATIONS_DIR"
+
+            # Create the control file
+            CONTROL_FILE="$DEBIAN_DIR/control"
+            echo "Package: $DEB_PACKAGE_NAME" > "$CONTROL_FILE"
+            echo "Version: $DEB_PACKAGE_VERSION" >> "$CONTROL_FILE"
+            echo "Architecture: $DEB_ARCHITECTURE" >> "$CONTROL_FILE"
+            echo "Maintainer: $DEB_MAINTAINER" >> "$CONTROL_FILE"
+            echo "Description: PureKFD" >> "$CONTROL_FILE"
+            echo "Depends: " >> "$CONTROL_FILE"  # Add dependencies if needed
+            echo "Section: Applications" >> "$CONTROL_FILE"
+
+            # Copy your .app directory to the package
+            cp -r "$GITHUB_WORKSPACE/build/Build/Products/$CONFIGURATION-iphoneos/$APPLICATION_NAME.app" "$APPLICATIONS_DIR"
+
+            # Create the post-installation script
+            POSTINST_FILE="$DEBIAN_DIR/postinst"
+            echo "#!/bin/bash" > "$POSTINST_FILE"
+            echo "chmod 755 /Applications/$APPLICATION_NAME.app/$APPLICATION_NAME" >> "$POSTINST_FILE"
+
+            # Make the post-installation script executable
+            chmod +x "$POSTINST_FILE"
+
+            # Build the .deb package
+            dpkg-deb -b "$PACKAGE_DIR" "${PACKAGE_DIR}.deb"
+        }
+
+        # Function to create the rootless .deb package
+        function create_rootless_deb_package {
+            PACKAGE_DIR="$DEB_PACKAGE_NAME-$DEB_PACKAGE_VERSION-$DEB_ARCHITECTURE_ROOTLESS"
+            DEBIAN_DIR="$PACKAGE_DIR/DEBIAN"
+            APPLICATIONS_DIR="$PACKAGE_DIR/var/jb/Applications"
+
+            mkdir -p "$DEBIAN_DIR"
+            mkdir -p "$APPLICATIONS_DIR"
+
+            # Create the control file
+            CONTROL_FILE="$DEBIAN_DIR/control"
+            echo "Package: $DEB_PACKAGE_NAME" > "$CONTROL_FILE"
+            echo "Version: $DEB_PACKAGE_VERSION" >> "$CONTROL_FILE"
+            echo "Architecture: $DEB_ARCHITECTURE_ROOTLESS" >> "$CONTROL_FILE"
+            echo "Maintainer: $DEB_MAINTAINER" >> "$CONTROL_FILE"
+            echo "Description: PureKFD" >> "$CONTROL_FILE"
+            echo "Depends: " >> "$CONTROL_FILE"  # Add dependencies if needed
+            echo "Section: Applications" >> "$CONTROL_FILE"
+
+            # Copy your .app directory to the package
+            cp -r "$GITHUB_WORKSPACE/build/Build/Products/$CONFIGURATION-iphoneos/$APPLICATION_NAME.app" "$APPLICATIONS_DIR"
+
+            # Create the post-installation script
+            POSTINST_FILE="$DEBIAN_DIR/postinst"
+            echo "#!/bin/bash" > "$POSTINST_FILE"
+            echo "chmod 755 /var/jb/Applications/$APPLICATION_NAME.app/$APPLICATION_NAME" >> "$POSTINST_FILE"
+
+            # Make the post-installation script executable
+            chmod +x "$POSTINST_FILE"
+
+            # Build the .deb package
+            dpkg-deb -b "$PACKAGE_DIR" "${PACKAGE_DIR}_rootless.deb"
+        }
+
+        # Build the .app with xcodebuild
+        xcodebuild -project "$GITHUB_WORKSPACE/PureKFD.xcodeproj" \
+            -scheme "$APPLICATION_NAME" \
+            -configuration "$CONFIGURATION" \
+            -derivedDataPath "$GITHUB_WORKSPACE/build" \
+            -sdk iphoneos \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+
+        # Create the .ipa from the .app
+        mkdir -p "$GITHUB_WORKSPACE/build/Payload"
+        cp -R "$GITHUB_WORKSPACE/build/Build/Products/$CONFIGURATION-iphoneos/$APPLICATION_NAME.app" "$GITHUB_WORKSPACE/build/Payload/"
+        (cd "$GITHUB_WORKSPACE/build" && zip -r "$APPLICATION_NAME.ipa" Payload)
+
+        # Remove signature from the app
+        codesign --remove-signature "$GITHUB_WORKSPACE/build/Payload/$APPLICATION_NAME.app"
+
+        # Add entitlements
+        ldid -S"$GITHUB_WORKSPACE/entitlements.plist" "$GITHUB_WORKSPACE/build/Payload/$APPLICATION_NAME.app/$APPLICATION_NAME"
+
+        # Package the app into a .deb file
+        create_deb_package
+        create_rootless_deb_package
+
+    - name: Upload IPA
+      uses: actions/upload-artifact@v2
+      with:
+        name: ipa-file
+        path: "$GITHUB_WORKSPACE/build/*.ipa"
+
+    - name: Upload DEB Packages
+      uses: actions/upload-artifact@v2
+      with:
+        name: deb-packages
+        path: |
+          "$GITHUB_WORKSPACE/*.deb"
